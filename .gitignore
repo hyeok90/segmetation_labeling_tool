@@ -1,0 +1,39 @@
+# Python & Runtime
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Virtual Environments (uv, venv, conda)
+.venv/
+venv/
+env/
+ENV/
+
+# OS & IDE Specific
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large Model Files (Download separately)
+*.pt
+*.pth
+*.onnx
+
+# Project Specific - Temporary & Data
+.temp_labels/
+ex/
+datasets/
+
+# SAM Model Weights directory
+sam/
+!sam/*.py
+
+# Training Outputs & Logs
+models/
+runs/
+yolo*_Manager/
+
+# Local logs
+*.log

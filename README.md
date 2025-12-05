@@ -35,26 +35,35 @@ The main dependencies are listed in `requirements.txt`.
 
 ## 🚀 Installation
 
+We recommend using [uv](https://github.com/astral-sh/uv) for extremely fast package management and resolution.
+
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/hyeok90/PyQt_active_learning
     cd PyQt_active_learning
     ```
 
-2.  **Install PyTorch:**
-    For GPU support (recommended), follow the official instructions on the [PyTorch website](https://pytorch.org/get-started/locally/) to install PyTorch matching your CUDA version. An example command is:
+2.  **Install uv (if not already installed):**
     ```bash
-    # Example for CUDA 12.1
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    ```
-    If you only have a CPU, you can install it as follows:
-    ```bash
-    pip3 install torch torchvision torchaudio
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
 
-3.  **Install other dependencies:**
+3.  **Create and Activate Virtual Environment:**
     ```bash
-    pip install -r requirements.txt
+    uv venv
+    source .venv/bin/activate
+    ```
+
+4.  **Install PyTorch (with CUDA support):**
+    To ensure you get the GPU-enabled version of PyTorch (e.g., CUDA 12.1), run the following command explicitly. `uv` handles dependency resolution much faster than pip.
+    ```bash
+    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    ```
+    *If you only need CPU support, you can skip this step.*
+
+5.  **Install other dependencies:**
+    ```bash
+    uv pip install -r requirements.txt
     ```
 
 ## 🏃‍♂️ Usage

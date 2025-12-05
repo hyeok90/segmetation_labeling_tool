@@ -109,45 +109,6 @@ class Shape:
             self.line_color = line_color
         self.shape_type = shape_type
 
-    def to_dict(self):
-        dictData = {
-            "label": self.label,
-            "score": self.score,
-            "points": [(p.x(), p.y()) for p in self.points],
-            "group_id": self.group_id,
-            "description": self.description,
-            "difficult": self.difficult,
-            "shape_type": self.shape_type,
-            "flags": self.flags,
-            "attributes": self.attributes,
-            "kie_linking": self.kie_linking,
-        }
-        if self.shape_type == "rotation":
-            dictData["direction"] = self.direction
-        dictData = {
-            **self.other_data,
-            **dictData,
-        }
-        return dictData
-
-    def load_from_dict(self, data: dict, close=True):
-        self.label = data["label"]
-        self.score = data.get("score")
-        self.points = [QtCore.QPointF(p[0], p[1]) for p in data["points"]]
-        self.group_id = data.get("group_id")
-        self.description = data.get("description", "")
-        self.difficult = data.get("difficult", False)
-        self.shape_type = data.get("shape_type", "polygon")
-        self.flags = data.get("flags", {})
-        self.attributes = data.get("attributes", {})
-        self.kie_linking = data.get("kie_linking", [])
-        if self.shape_type == "rotation":
-            self.direction = data.get("direction", 0)
-        self.other_data = {k: v for k, v in data.items() if k not in self.KEYS}
-        if close:
-            self.close()
-        return self
-
     @property
     def shape_type(self):
         """Get shape type (polygon, rectangle, rotation, point, line, ...)"""
@@ -197,10 +158,6 @@ class Shape:
                 self.close()
             else:
                 self.points.append(point)
-
-    def can_add_point(self):
-        """Check if shape supports more points"""
-        return self.shape_type in ["polygon", "linestrip"]
 
     def pop_point(self):
         """Remove and return the last point of the shape"""
@@ -363,18 +320,6 @@ class Shape:
                 min_distance = dist
                 min_i = i
         return min_i
-
-    def nearest_edge(self, point, epsilon):
-        """Get nearest edge index"""
-        min_distance = float("inf")
-        post_i = None
-        for i in range(len(self.points)):
-            line = [self.points[i - 1], self.points[i]]
-            dist = utils.distance_to_line(point, line)
-            if dist <= epsilon and dist < min_distance:
-                min_distance = dist
-                post_i = i
-        return post_i
 
     def contains_point(self, point):
         """Check if shape contains a point"""

@@ -11,15 +11,12 @@ class RealYOLOPredictor:
         self.model = YOLO(model_path)
         self.model.to(self.device)
 
-    def is_loaded(self):
-        return self.model is not None
-
     def get_class_names(self):
         if self.model and self.model.names:
             return self.model.names
         return {}
 
-    def predict_and_optimize(self, img_path, epsilon=1.0):
+    def predict_and_optimize(self, img_path, conf=0.25, epsilon=1.0):
         img = cv2.imread(img_path)
         if img is None:
             print(f"Error: Could not read image {img_path}")
@@ -27,7 +24,7 @@ class RealYOLOPredictor:
             
         img_h, img_w = img.shape[:2]
         
-        results = self.model(img, imgsz=1280, conf=0.25, device=self.device, retina_masks=True)
+        results = self.model(img, imgsz=1280, conf=conf, device=self.device, retina_masks=True)
 
         if not results or results[0].masks is None:
             return [], (img_w, img_h), 0.0

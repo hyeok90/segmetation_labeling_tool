@@ -6,17 +6,6 @@ def distance(p):
     """Distance between two points"""
     return math.sqrt(p.x() * p.x() + p.y() * p.y())
 
-def distance_to_line(point, line):
-    """Distance from a point to a line"""
-    p1, p2 = line
-    d = p2 - p1
-    l2 = d.x() * d.x() + d.y() * d.y()
-    if l2 == 0:
-        return distance(point - p1)
-    t = max(0, min(1, ((point - p1).x() * d.x() + (point - p1).y() * d.y()) / l2))
-    projection = p1 + t * d
-    return distance(point - projection)
-
 def load_yolo_labels(txt_path, img_w, img_h, class_names):
     from shape import Shape
     shapes = []
@@ -80,8 +69,7 @@ def save_yolo_labels(txt_path, shapes, img_w, img_h, class_names):
             normalized_coords.append(f"{y_norm:.6f}")
         
         if normalized_coords:
-            score = shape.score if shape.score is not None else 1.0
-            line_parts = [str(class_id)] + normalized_coords + [f"{score:.6f}"]
+            line_parts = [str(class_id)] + normalized_coords
             lines.append(" ".join(line_parts))
     
     with open(txt_path, 'w') as f:
