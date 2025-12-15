@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QAction, QFileDialog, 
-    QListWidget, QMessageBox, QDockWidget, QListWidgetItem, QInputDialog, QLabel, QMenu, QDialog, QDialogButtonBox, QProgressDialog
+    QListWidget, QMessageBox, QDockWidget, QListWidgetItem, QInputDialog, QLabel, QMenu, QDialog, QDialogButtonBox, QProgressDialog, QSlider
 )
 from PyQt5.QtGui import QPixmap, QIcon, QColor, QImage
 from PyQt5.QtCore import Qt, QPointF
@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self.current_image_rgb = None
         self.class_names = []
         self.color_map = []
+        self.epsilon = 1.0 # Default RDP epsilon
 
         # Directory for temporary labels, created within the project folder
         self.temp_dir = os.path.join(os.getcwd(), ".temp_labels")
@@ -161,6 +162,26 @@ class MainWindow(QMainWindow):
         tool_bar.addAction(self.draw_sam_action)
         tool_bar.addSeparator()
         tool_bar.addAction(self.fit_window_action)
+        
+        tool_bar.addSeparator()
+        
+        # Epsilon Slider for RDP simplification
+        self.epsilon_label = QLabel(" Simplify: 1.0 ")
+        tool_bar.addWidget(self.epsilon_label)
+        
+        self.epsilon_slider = QSlider(Qt.Horizontal)
+        self.epsilon_slider.setMinimum(0)
+        self.epsilon_slider.setMaximum(50) # 0.0 to 5.0
+        self.epsilon_slider.setValue(10) # Default 1.0
+        self.epsilon_slider.setFixedWidth(100)
+        self.epsilon_slider.valueChanged.connect(self.update_epsilon)
+        tool_bar.addWidget(self.epsilon_slider)
+
+    def update_epsilon(self, value):
+        self.epsilon = value / 10.0
+        self.epsilon_label.setText(f" Simplify: {self.epsilon:.1f} ")
+        if self.sam_predictor:
+            self.sam_predictor.epsilon = self.epsilon
 
     def create_docks(self):
         file_list_dock = QDockWidget("File List", self)
@@ -254,6 +275,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             selected_images = dialog.get_selected_images()
             model_path = dialog.get_selected_model()
+            epsilon = dialog.get_epsilon()
 
             if not model_path:
                 QMessageBox.warning(self, "Warning", "Please select a model for inference.")
@@ -263,9 +285,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "Please select at least one image for inference.")
                 return
 
-            self.run_inference_on_selection(selected_images, model_path)
+            self.run_inference_on_selection(selected_images, model_path, epsilon)
 
-    def run_inference_on_selection(self, selected_images, model_path):
+    def run_inference_on_selection(self, selected_images, model_path, epsilon):
         try:
             predictor = RealYOLOPredictor(model_path)
             model_class_names = [predictor.get_class_names()[i] for i in sorted(predictor.get_class_names().keys())]
@@ -295,16 +317,16 @@ class MainWindow(QMainWindow):
             if progress_dialog.wasCanceled():
                 break
             
-            self.perform_inference(img_path, predictor, model_class_names) # Use model-specific class names for saving
+            self.perform_inference(img_path, predictor, model_class_names, epsilon) # Use model-specific class names for saving
 
-        progress_dialog.setValue(len(image_paths))
+        progress_dialog.setValue(len(selected_images))
         QMessageBox.information(self, "Complete", "Inference process finished.")
 
         # Always reload the current view to reflect any possible changes
         # (e.g., new class colors, or if the current image itself was updated).
         self.load_labels_for_current_image()
 
-    def perform_inference(self, image_path, predictor, class_names):
+    def perform_inference(self, image_path, predictor, class_names, epsilon):
         try:
             # Find corresponding image dimensions from self.image_paths
             img_dims = next((dims for path, dims in self.image_paths if path == image_path), None)
@@ -314,7 +336,7 @@ class MainWindow(QMainWindow):
 
             img_w, img_h = img_dims
             
-            instances, _, _ = predictor.predict_and_optimize(image_path)
+            instances, _, _ = predictor.predict_and_optimize(image_path, epsilon=epsilon)
             shapes_to_save = []
             for inst in instances:
                 class_id, polygon_data, conf = inst

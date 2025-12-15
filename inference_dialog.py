@@ -2,7 +2,7 @@ import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QListWidget, QListWidgetItem, 
     QCheckBox, QDialogButtonBox, QFileDialog, QLineEdit, 
-    QPushButton, QGroupBox, QFormLayout
+    QPushButton, QGroupBox, QFormLayout, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt
 
@@ -11,7 +11,7 @@ class InferenceDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Run Inference on Images")
         self.layout = QVBoxLayout(self)
-        self.setMinimumSize(400, 500)
+        self.setMinimumSize(400, 600)
 
         # --- Model Selection ---
         self.model_group = QGroupBox("Model Selection")
@@ -23,6 +23,16 @@ class InferenceDialog(QDialog):
         self.model_layout.addRow("Model Path:", self.browse_button)
         self.model_layout.addRow(self.model_path_edit)
         self.layout.addWidget(self.model_group)
+
+        # --- Settings ---
+        self.settings_group = QGroupBox("Inference Settings")
+        self.settings_layout = QFormLayout(self.settings_group)
+        self.epsilon_spin = QDoubleSpinBox()
+        self.epsilon_spin.setRange(0.0, 10.0)
+        self.epsilon_spin.setSingleStep(0.1)
+        self.epsilon_spin.setValue(1.0)
+        self.settings_layout.addRow("Polygon Simplify (Epsilon):", self.epsilon_spin)
+        self.layout.addWidget(self.settings_group)
 
         # --- Image Selection ---
         self.image_group = QGroupBox("Image Selection")
@@ -57,6 +67,9 @@ class InferenceDialog(QDialog):
 
     def get_selected_model(self):
         return self.model_path_edit.text()
+
+    def get_epsilon(self):
+        return self.epsilon_spin.value()
 
     def toggle_select_all(self, state):
         check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked

@@ -66,6 +66,13 @@ We recommend using [uv](https://github.com/astral-sh/uv) for extremely fast pack
     uv pip install -r requirements.txt
     ```
 
+6.  **Fix OpenCV Compatibility (Crucial):**
+    To avoid conflicts between PyQt5 and OpenCV's internal Qt dependencies, you must use the headless version. Run these commands to ensure the correct environment:
+    ```bash
+    uv pip uninstall opencv-python
+    uv pip install --force-reinstall opencv-python-headless
+    ```
+
 ## 🏃‍♂️ Usage
 
 1.  **Run the application:**

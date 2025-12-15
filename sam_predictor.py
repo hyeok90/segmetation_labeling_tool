@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import onnxruntime
 from rdp import rdp
-from rdp import rdp
 
 class LRUCache:
     def __init__(self, capacity: int):
