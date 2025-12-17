@@ -26,10 +26,6 @@ Thumbs.db
 ex/
 datasets/
 
-# SAM Model Weights directory
-sam/
-!sam/*.py
-
 # Training Outputs & Logs
 models/
 runs/
