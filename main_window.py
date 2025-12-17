@@ -1181,17 +1181,30 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         
-        if self.paint_mode_action.isChecked():
-            if key == Qt.Key_Q:
+        # 'Q' and 'E' can now trigger Paint mode directly (if not in SAM mode)
+        if key == Qt.Key_Q:
+            if self.image_paths and self.current_image_index >= 0:
+                if not self.paint_mode_action.isChecked():
+                    self.paint_mode_action.setChecked(True)
+                
+                # Ensure specifically in Brush mode (could be toggled from Eraser)
                 self.viewer.set_mode(ImageViewer.CREATE_BRUSH)
                 self.statusBar().showMessage("Switched to Brush.", 1000)
-                event.accept()
-                return
-            elif key == Qt.Key_E:
+            event.accept()
+            return
+
+        elif key == Qt.Key_E:
+            if self.image_paths and self.current_image_index >= 0:
+                if not self.paint_mode_action.isChecked():
+                    self.paint_mode_action.setChecked(True)
+                
+                # Ensure specifically in Eraser mode
                 self.viewer.set_mode(ImageViewer.CREATE_ERASER)
                 self.statusBar().showMessage("Switched to Eraser.", 1000)
-                event.accept()
-                return
+            event.accept()
+            return
+
+        if self.paint_mode_action.isChecked():
             # Block navigation keys A/D while painting
             if key == Qt.Key_A or key == Qt.Key_D:
                  self.statusBar().showMessage("Finish painting before changing images.", 2000)

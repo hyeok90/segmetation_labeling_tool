@@ -189,7 +189,8 @@ class ImageViewer(QtWidgets.QWidget):
             # we rely on mouseMoveEvent to trigger updates. 
             # Ideally, we track the last mouse scene position.
             if hasattr(self, 'last_mouse_pos'):
-                p.setPen(QtGui.QPen(Qt.white, 2 / self.scale, Qt.DashLine))
+                cursor_color = Qt.green if self.mode == self.CREATE_BRUSH else Qt.red
+                p.setPen(QtGui.QPen(cursor_color, 2 / self.scale, Qt.SolidLine))
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(self.last_mouse_pos, self.brush_radius, self.brush_radius)
 
@@ -253,6 +254,7 @@ class ImageViewer(QtWidgets.QWidget):
                     
                     self.brush_painter = QtGui.QPainter(self.brush_layer)
                     self.brush_painter.setRenderHint(QtGui.QPainter.Antialiasing)
+                    self.brush_painter.setCompositionMode(QtGui.QPainter.CompositionMode_Source)
                     
                     color = QtGui.QColor(0, 255, 0, 100) if self.mode == self.CREATE_BRUSH else QtGui.QColor(255, 0, 0, 100)
                     self.brush_painter.setPen(Qt.NoPen)
