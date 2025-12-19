@@ -1,11 +1,11 @@
-# YOLO11-seg Active Learning-based Annotation Tool
+# YOLO-seg Active Learning-based Annotation Tool
 
-This is a comprehensive GUI-based image annotation tool developed with Python and PyQt5, specifically optimized for **YOLOv11-seg** models. It integrates an **Active Learning** workflow to significantly accelerate object segmentation tasks by combining manual annotation tools with AI-assisted labeling and refinement.
+This is a comprehensive GUI-based image annotation tool developed with Python and PyQt5, specifically optimized for **YOLO-seg** models. It integrates an **Active Learning** workflow to significantly accelerate object segmentation tasks by combining manual annotation tools with AI-assisted labeling and refinement.
 
 ## ✨ Key Features
 
 ### 1. 🧠 Active Learning & Automation
-- **Auto-Labeling (Inference):** Automatically detect and segment objects in your images using a pre-trained YOLOv11-seg model.
+- **Auto-Labeling (Inference):** Automatically detect and segment objects in your images using a pre-trained YOLO-seg model.
 - **Class Specification (Refinement):** A specialized feature to refine specific labels. Select a "target class" (e.g., generic "vehicle"), and use a secondary, specialized model to classify it into more specific categories (e.g., "car", "bus", "truck") by analyzing cropped regions.
 
 ### 2. 🖋️ Versatile Annotation Tools
@@ -54,8 +54,8 @@ We recommend using [uv](https://github.com/astral-sh/uv) for fast and reliable p
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/hyeok90/PyQt_active_learning
-    cd PyQt_active_learning
+    git clone https://github.com/hyeok90/segmentation_labeling_tool
+    cd segmentation_labeling_tool
     ```
 
 2.  **Install uv (if not already installed):**
