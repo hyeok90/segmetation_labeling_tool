@@ -3,6 +3,7 @@ import sys
 import shutil
 import cv2
 import numpy as np
+import torch
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QAction, QFileDialog, 
