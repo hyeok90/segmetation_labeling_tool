@@ -281,10 +281,8 @@ class MainWindow(QMainWindow):
             
             image_files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
             
-            # Setup labels directory (implicit source)
-            labels_dir = os.path.join(os.path.dirname(folder_path), "labels")
-            os.makedirs(labels_dir, exist_ok=True)
-            self.label_manager.set_source_label_dir(labels_dir)
+            # Reset source label directory. User must upload explicitly.
+            self.label_manager.set_source_label_dir(None)
             
             for img_file in image_files:
                 img_path = os.path.join(folder_path, img_file)

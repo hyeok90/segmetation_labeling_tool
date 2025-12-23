@@ -30,8 +30,8 @@ This is a comprehensive GUI-based image annotation tool developed with Python an
 - **Auto-Update:** After training, the application automatically reloads the new "best" model for immediate feedback.
 
 ### 5. 📂 Data Management
-- **Flexible Import:** Open any folder of images. Labels are automatically detected if they exist in a sibling `labels` directory (e.g., `images/..`, `labels/..`).
-- **Upload Labels:** Manually import labels from a specific source directory if your structure differs.
+- **Open Image Folder:** Open any folder of images.
+- **Upload Labels:** Manually import labels from a specific source directory.
 - **Export:** Export your finalized dataset (images + YOLO format txt labels) to a clean directory structure, ready for MLOps pipelines.
 
 ## ⚙️ Requirements
@@ -95,15 +95,15 @@ We recommend using [uv](https://github.com/astral-sh/uv) for fast and reliable p
     ```
 
 2.  **Load Data:**
-    - **Open Image Folder:** `File -> Open Image Folder`. Labels in `../labels` are loaded automatically.
-    - **(Optional) Upload Labels:** If you have existing labels elsewhere, use `File -> Upload Labels`.
+    - **Open Image Folder:** `File -> Open Image Folder`.
+    - **Upload Labels:** `File -> Upload Labels` to load existing labels.
 
 3.  **Active Learning (Auto-Labeling):**
     - **Load Model:** `File -> Run Model Inference`. Select a `.pt` model and images.
     - **Refine:** Use **Class Specification** (`Edit -> Class Specification`) to refine labels using a second model if needed.
 
 4.  **Manual Annotation:**
-    - **Draw:** Press `W` for Polygon or `B` for Paint.
+    - **Draw:** Press `W` for Polygon, `Q` for Brush, or `E` for Eraser.
     - **SAM:** Press `S` to enter SAM mode. Click to segment. Press `F` to accept.
     - **Edit:** Click a polygon to select. Drag points to move. Press `Delete` to remove.
 
@@ -131,14 +131,14 @@ We recommend using [uv](https://github.com/astral-sh/uv) for fast and reliable p
 | Key | Action |
 | :--- | :--- |
 | `W` | Toggle **Polygon** Mode |
-| `B` | Toggle **Paint** Mode |
+| `B` | Toggle **Paint** Mode (Default: Brush) |
+| `Q` | Switch to **Brush** (Paint Mode) |
+| `E` | Switch to **Eraser** (Paint Mode) |
 | `S` | Toggle **SAM** Mode |
 
-### Paint Mode (B)
+### Paint Mode Adjustments
 | Key | Action |
 | :--- | :--- |
-| `Q` | Switch to **Brush** |
-| `E` | Switch to **Eraser** |
 | `[` / `]` | Decrease / Increase Brush Size |
 | `,` / `.` | Decrease / Increase Smoothness (Epsilon) |
 
