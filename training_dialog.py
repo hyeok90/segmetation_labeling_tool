@@ -6,12 +6,28 @@ from PyQt5.QtWidgets import (
 from yaml_creator_dialog import YamlCreatorDialog
 
 class TrainingDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, current_model_path=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Train Model")
         self.setMinimumWidth(600)
 
         self.layout = QVBoxLayout(self)
+
+        # Model Selection
+        self.model_group = QGroupBox("Model")
+        self.model_layout = QFormLayout(self.model_group)
+        self.model_path_edit = QLineEdit()
+        self.model_path_edit.setPlaceholderText("Select a base model (e.g. yolov11n-seg.pt)...")
+        self.model_path_edit.textChanged.connect(self.validate_inputs)
+        if current_model_path:
+            self.model_path_edit.setText(current_model_path)
+        
+        self.model_browse_btn = QPushButton("Browse...")
+        self.model_browse_btn.clicked.connect(self.browse_model)
+        
+        self.model_layout.addRow("Base Model:", self.model_browse_btn)
+        self.model_layout.addRow("", self.model_path_edit)
+        self.layout.addWidget(self.model_group)
 
         # Data selection
         self.data_group = QGroupBox("Data")
@@ -175,13 +191,20 @@ class TrainingDialog(QDialog):
         self.layout.addWidget(self.button_box)
 
     def validate_inputs(self):
-        is_valid = bool(self.yaml_path_edit.text().strip())
+        is_valid = bool(self.yaml_path_edit.text().strip()) and bool(self.model_path_edit.text().strip())
         self.button_box.button(QDialogButtonBox.Ok).setEnabled(is_valid)
+
+    def browse_model(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Base Model", "", "PyTorch Models (*.pt);;All Files (*)")
+        if file_path:
+            self.model_path_edit.setText(file_path)
+            self.validate_inputs()
 
     def browse_yaml(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Dataset YAML File", "", "YAML Files (*.yaml *.yml)")
         if file_path:
             self.yaml_path_edit.setText(file_path)
+            self.validate_inputs()
 
     def create_new_yaml(self):
         dialog = YamlCreatorDialog(self)
@@ -189,9 +212,11 @@ class TrainingDialog(QDialog):
             created_path = dialog.get_created_file_path()
             if created_path:
                 self.yaml_path_edit.setText(created_path)
+                self.validate_inputs()
 
     def get_parameters(self):
         return {
+            'model_path': self.model_path_edit.text(),
             'data': self.yaml_path_edit.text(),
             'epochs': self.epochs_spinbox.value(),
             'imgsz': self.imgsz_spinbox.value(),

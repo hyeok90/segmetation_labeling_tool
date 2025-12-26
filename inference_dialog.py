@@ -29,11 +29,27 @@ class InferenceDialog(QDialog):
         # --- Settings ---
         self.settings_group = QGroupBox("Inference Settings")
         self.settings_layout = QFormLayout(self.settings_group)
+        
         self.epsilon_spin = QDoubleSpinBox()
         self.epsilon_spin.setRange(0.0, 10.0)
         self.epsilon_spin.setSingleStep(0.1)
         self.epsilon_spin.setValue(1.0)
+        
+        self.conf_spin = QDoubleSpinBox()
+        self.conf_spin.setRange(0.01, 1.0)
+        self.conf_spin.setSingleStep(0.05)
+        self.conf_spin.setValue(0.25) # Default YOLO conf
+        
+        self.iou_spin = QDoubleSpinBox()
+        self.iou_spin.setRange(0.01, 1.0)
+        self.iou_spin.setSingleStep(0.05)
+        self.iou_spin.setValue(0.7) # Default YOLO NMS IoU
+        self.iou_spin.setToolTip("Lower value = stricter NMS (fewer overlaps)")
+
+        self.settings_layout.addRow("Confidence Threshold:", self.conf_spin)
+        self.settings_layout.addRow("NMS IoU Threshold:", self.iou_spin)
         self.settings_layout.addRow("Polygon Simplify (Epsilon):", self.epsilon_spin)
+        
         self.layout.addWidget(self.settings_group)
 
         # --- Image Selection ---
@@ -86,6 +102,12 @@ class InferenceDialog(QDialog):
 
     def get_epsilon(self):
         return self.epsilon_spin.value()
+
+    def get_conf(self):
+        return self.conf_spin.value()
+
+    def get_iou(self):
+        return self.iou_spin.value()
 
     def toggle_select_all(self, state):
         check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked

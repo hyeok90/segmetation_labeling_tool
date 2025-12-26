@@ -7,24 +7,32 @@ import torch
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QAction, QFileDialog, 
-    QListWidget, QMessageBox, QDockWidget, QListWidgetItem, QInputDialog, QLabel, QMenu, QDialog, QProgressDialog, QSlider, QActionGroup
+    QListWidget, QMessageBox, QDockWidget, QListWidgetItem, QInputDialog, QLabel, QMenu, QDialog, QProgressDialog, QSlider, QActionGroup,
+    QWidget, QSizePolicy, QShortcut, QAbstractItemView
 )
-from PyQt5.QtGui import QPixmap, QIcon, QColor, QImage
+from PyQt5.QtGui import QPixmap, QIcon, QColor, QImage, QKeySequence
 from PyQt5.QtCore import Qt, QPointF
 from yolo_predictor import RealYOLOPredictor
 from sam_predictor import SAMPredictor
 from image_viewer import ImageViewer
 from shape import Shape
-from utils import load_yolo_labels, save_yolo_labels
+from utils import save_yolo_labels
 from training_dialog import TrainingDialog
 from training_thread import TrainingThread
 from encoder_thread import ImageEncoderThread
 from inference_dialog import InferenceDialog
-from class_manager_dialog import ClassManagerDialog
 from class_selector_dialog import ClassSelectorDialog
 from class_specification_dialog import ClassSpecificationDialog
+from export_dialog import ExportDialog
 from config import Config
 from label_manager import LabelManager
+# SAM 2 Imports
+from tracker_thread import SAM2TrackerThread
+try:
+    from sam2_tracker import SAM2Tracker, SAM2_AVAILABLE
+except ImportError:
+    SAM2Tracker = None
+    SAM2_AVAILABLE = False
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -45,13 +53,18 @@ class MainWindow(QMainWindow):
         # Initialize Label Manager
         self.label_manager = LabelManager(Config.get_temp_dir())
 
-        # SAM Predictor
+        # SAM Predictor (v1)
         self.sam_predictor = None
         self.is_sam_mode = False
         self.sam_point_mode = None # 1 for positive, 0 for negative
         self.encoder_thread = None
         self.is_encoding = False
         
+        # SAM 2 Tracker
+        self.sam2_tracker = None
+        self.tracker_thread = None
+        self.sam2_checkpoint_path = None # Cache the path
+
         if os.path.exists(Config.SAM_ENCODER_PATH) and os.path.exists(Config.SAM_DECODER_PATH):
             try:
                 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -78,6 +91,8 @@ class MainWindow(QMainWindow):
         self.viewer.polygon_selected.connect(self.on_polygon_selected)
         self.viewer.new_polygon_drawn.connect(self.on_new_polygon_drawn)
         self.viewer.shapes_updated.connect(self.populate_instance_list)
+        
+        print("MainWindow initialization completed. Showing UI...")
 
     def create_actions(self):
         self.open_folder_action = QAction(QIcon.fromTheme("folder-open"), "&Open Image Folder", self)
@@ -131,11 +146,151 @@ class MainWindow(QMainWindow):
         self.undo_action = QAction(QIcon.fromTheme("edit-undo"), "&Undo", self)
         self.undo_action.triggered.connect(self.undo_shape)
 
-        self.manage_classes_action = QAction(QIcon.fromTheme("document-properties"), "Class Manager...", self)
-        self.manage_classes_action.triggered.connect(self.open_class_manager)
-
         self.class_specification_action = QAction(QIcon.fromTheme("system-search"), "Class Specification...", self)
         self.class_specification_action.triggered.connect(self.run_class_specification)
+
+        self.batch_track_action = QAction(QIcon.fromTheme("media-playback-start"), "Batch Track (SAM 2)...", self)
+        self.batch_track_action.triggered.connect(self.run_batch_tracking)
+        if not SAM2_AVAILABLE:
+            self.batch_track_action.setEnabled(False)
+            self.batch_track_action.setToolTip("SAM 2 library not installed.")
+
+        # Sub-mode Actions (Toolbar only)
+        self.brush_tool_action = QAction(QIcon.fromTheme("draw-brush"), "Brush", self)
+        self.brush_tool_action.setCheckable(True)
+        self.brush_tool_action.triggered.connect(self.set_brush_tool)
+
+        self.eraser_tool_action = QAction(QIcon.fromTheme("draw-eraser"), "Eraser", self)
+        self.eraser_tool_action.setCheckable(True)
+        self.eraser_tool_action.triggered.connect(self.set_eraser_tool)
+
+        self.create_shortcuts()
+
+    def create_shortcuts(self):
+        # Global Shortcuts using invisible QActions
+        # This ensures they work even if toolbar buttons are hidden or list widgets have focus.
+        
+        # Q -> Brush (Always switch to Brush)
+        self.act_brush = QAction(self)
+        self.act_brush.setShortcut(QKeySequence(Qt.Key_Q))
+        self.act_brush.setShortcutContext(Qt.WindowShortcut)
+        self.act_brush.triggered.connect(self.activate_brush_tool)
+        self.addAction(self.act_brush)
+
+        # E -> Eraser (Always switch to Eraser)
+        self.act_eraser = QAction(self)
+        self.act_eraser.setShortcut(QKeySequence(Qt.Key_E))
+        self.act_eraser.setShortcutContext(Qt.WindowShortcut)
+        self.act_eraser.triggered.connect(self.activate_eraser_tool)
+        self.addAction(self.act_eraser)
+        
+        # W -> Draw Poly Toggle
+        self.act_poly = QAction(self)
+        self.act_poly.setShortcut(QKeySequence(Qt.Key_W))
+        self.act_poly.setShortcutContext(Qt.WindowShortcut)
+        self.act_poly.triggered.connect(lambda: self.draw_poly_action.toggle())
+        self.addAction(self.act_poly)
+        
+        # S -> SAM Toggle
+        self.act_sam = QAction(self)
+        self.act_sam.setShortcut(QKeySequence(Qt.Key_S))
+        self.act_sam.setShortcutContext(Qt.WindowShortcut)
+        self.act_sam.triggered.connect(self.toggle_sam_shortcut)
+        self.addAction(self.act_sam)
+        
+        # Delete / Backspace -> Context Sensitive Delete
+        self.act_del = QAction(self)
+        self.act_del.setShortcut(QKeySequence(Qt.Key_Delete))
+        self.act_del.setShortcutContext(Qt.WindowShortcut)
+        self.act_del.triggered.connect(self.handle_delete_shortcut)
+        self.addAction(self.act_del)
+        
+        self.act_backspace = QAction(self)
+        self.act_backspace.setShortcut(QKeySequence(Qt.Key_Backspace))
+        self.act_backspace.setShortcutContext(Qt.WindowShortcut)
+        self.act_backspace.triggered.connect(self.handle_delete_shortcut)
+        self.addAction(self.act_backspace)
+
+        # A -> Previous Image
+        self.act_prev = QAction(self)
+        self.act_prev.setShortcut(QKeySequence(Qt.Key_A))
+        self.act_prev.setShortcutContext(Qt.WindowShortcut)
+        self.act_prev.triggered.connect(self.prev_image_action.trigger)
+        self.addAction(self.act_prev)
+
+        # D -> Next Image
+        self.act_next = QAction(self)
+        self.act_next.setShortcut(QKeySequence(Qt.Key_D))
+        self.act_next.setShortcutContext(Qt.WindowShortcut)
+        self.act_next.triggered.connect(self.next_image_action.trigger)
+        self.addAction(self.act_next)
+
+    def handle_delete_shortcut(self):
+        # Check focus for context-sensitive delete
+        focus_widget = QApplication.focusWidget()
+        
+        if focus_widget == self.file_list_widget:
+            self.delete_selected_image()
+            return
+            
+        # Default behavior: Delete Instance / Vertex
+        # Priority 1: Delete specific vertex if highlighted
+        if self.viewer.delete_selected_vertex():
+            self.populate_instance_list()
+            return
+            
+        # Priority 2: Delete selected instances (shapes)
+        # Check if selection exists in Viewer (synced from list)
+        if self.viewer.selected_shapes:
+            reply = QMessageBox.question(self, "Delete", f"Delete {len(self.viewer.selected_shapes)} selected instances?",
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.delete_selected_instances()
+
+    def activate_brush_tool(self):
+        if self.image_paths and self.current_image_index >= 0:
+            if not self.paint_mode_action.isChecked():
+                self.paint_mode_action.setChecked(True)
+            self.set_brush_tool()
+
+    def activate_eraser_tool(self):
+        if self.image_paths and self.current_image_index >= 0:
+            if not self.paint_mode_action.isChecked():
+                self.paint_mode_action.setChecked(True)
+            self.set_eraser_tool()
+
+    def toggle_sam_shortcut(self):
+         if self.draw_sam_action.isEnabled():
+             self.draw_sam_action.toggle()
+
+    def set_brush_tool(self):
+        if not self.paint_mode_action.isChecked():
+            self.paint_mode_action.setChecked(True)
+        self.viewer.set_mode(ImageViewer.CREATE_BRUSH)
+        self.update_tool_actions_state()
+        self.statusBar().showMessage("Switched to Brush.")
+
+    def set_eraser_tool(self):
+        if not self.paint_mode_action.isChecked():
+            self.paint_mode_action.setChecked(True)
+        self.viewer.set_mode(ImageViewer.CREATE_ERASER)
+        self.update_tool_actions_state()
+        self.statusBar().showMessage("Switched to Eraser.")
+    
+    # Removed sam_pos/neg actions methods
+
+    def update_tool_actions_state(self):
+        # Uncheck all first
+        self.brush_tool_action.setChecked(False)
+        self.eraser_tool_action.setChecked(False)
+
+        if self.paint_mode_action.isChecked():
+            if self.viewer.mode == ImageViewer.CREATE_BRUSH:
+                self.brush_tool_action.setChecked(True)
+            elif self.viewer.mode == ImageViewer.CREATE_ERASER:
+                self.eraser_tool_action.setChecked(True)
+        
+        self.update_mode_status()
 
     def set_navigation_enabled(self, enabled):
         self.prev_image_action.setEnabled(enabled)
@@ -144,6 +299,7 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(enabled)
         self.open_folder_action.setEnabled(enabled)
         self.file_list_widget.setEnabled(enabled)
+        self.batch_track_action.setEnabled(enabled and SAM2_AVAILABLE)
 
     def create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -162,9 +318,9 @@ class MainWindow(QMainWindow):
         edit_menu = menu_bar.addMenu("&Edit")
         edit_menu.addAction(self.undo_action)
         edit_menu.addSeparator()
-        edit_menu.addAction(self.manage_classes_action)
-        edit_menu.addSeparator()
         edit_menu.addAction(self.class_specification_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.batch_track_action)
 
         view_menu = menu_bar.addMenu("&View")
         view_menu.addAction(self.prev_image_action)
@@ -178,8 +334,21 @@ class MainWindow(QMainWindow):
         tool_bar.addAction(self.paint_mode_action)
         tool_bar.addSeparator()
         tool_bar.addAction(self.fit_window_action)
+        tool_bar.addSeparator()
+        tool_bar.addAction(self.batch_track_action)
         
         tool_bar.addSeparator()
+        # Tool Sub-actions
+        tool_bar.addAction(self.brush_tool_action)
+        self.brush_tool_action.setVisible(False)
+        tool_bar.addAction(self.eraser_tool_action)
+        self.eraser_tool_action.setVisible(False)
+        # Removed SAM tool buttons as they are now mouse clicks
+
+        # Spacer
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tool_bar.addWidget(spacer)
         
         # Epsilon Slider for RDP simplification
         self.epsilon_label = QLabel(" Epsilon: 1.0 ")
@@ -235,12 +404,16 @@ class MainWindow(QMainWindow):
         
         class_list_dock = QDockWidget("Class List", self)
         self.class_list_widget = QListWidget()
+        self.class_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.class_list_widget.customContextMenuRequested.connect(self.show_class_list_context_menu)
+        self.class_list_widget.itemDoubleClicked.connect(self.on_class_item_double_clicked)
         class_list_dock.setWidget(self.class_list_widget)
         class_list_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, class_list_dock)
 
         instance_list_dock = QDockWidget("Instance List", self)
         self.instance_list_widget = QListWidget()
+        self.instance_list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection) # Allow multi-selection
         self.instance_list_widget.itemClicked.connect(self.on_instance_item_clicked)
         self.instance_list_widget.itemDoubleClicked.connect(self.on_instance_double_clicked)
         instance_list_dock.setWidget(self.instance_list_widget)
@@ -249,8 +422,40 @@ class MainWindow(QMainWindow):
 
     def create_status_bar(self):
         self.statusBar().showMessage("Ready")
+        
+        self.mode_label = QLabel(" Mode: View ")
+        self.mode_label.setStyleSheet("padding-right: 10px; font-weight: bold;")
+        self.mode_label.hide() # Initially hidden
+        self.statusBar().addPermanentWidget(self.mode_label)
+
         self.conf_label = QLabel("Avg. Confidence: N/A")
         self.statusBar().addPermanentWidget(self.conf_label)
+
+    def update_mode_status(self):
+        # 1. Hide all sub-tools first
+        self.brush_tool_action.setVisible(False)
+        self.eraser_tool_action.setVisible(False)
+        
+        text = None
+        if self.draw_poly_action.isChecked():
+            text = "Draw Polygon"
+        
+        elif self.draw_sam_action.isChecked():
+            text = "SAM (L: Pos, R: Neg)"
+        
+        elif self.paint_mode_action.isChecked():
+            # Show Paint tools
+            self.brush_tool_action.setVisible(True)
+            self.eraser_tool_action.setVisible(True)
+            
+            mode = "Brush" if self.viewer.mode == ImageViewer.CREATE_BRUSH else "Eraser"
+            text = f"Paint ({mode})"
+        
+        if text:
+            self.mode_label.setText(f" Mode: {text} ")
+            self.mode_label.show()
+        else:
+            self.mode_label.hide()
 
     def set_actions_enabled(self, enabled):
         self.open_folder_action.setEnabled(enabled)
@@ -266,7 +471,6 @@ class MainWindow(QMainWindow):
             self.draw_sam_action.setEnabled(enabled)
         self.fit_window_action.setEnabled(enabled)
         self.undo_action.setEnabled(enabled)
-        self.manage_classes_action.setEnabled(enabled)
         self.class_specification_action.setEnabled(enabled)
         self.paint_mode_action.setEnabled(enabled)
 
@@ -318,6 +522,8 @@ class MainWindow(QMainWindow):
             selected_images = dialog.get_selected_images()
             model_path = dialog.get_selected_model()
             epsilon = dialog.get_epsilon()
+            conf = dialog.get_conf()
+            iou = dialog.get_iou()
 
             if not model_path:
                 QMessageBox.warning(self, "Warning", "Please select a model for inference.")
@@ -327,9 +533,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "Please select at least one image for inference.")
                 return
 
-            self.run_inference_on_selection(selected_images, model_path, epsilon)
+            self.run_inference_on_selection(selected_images, model_path, epsilon, conf, iou)
 
-    def run_inference_on_selection(self, selected_images, model_path, epsilon):
+    def run_inference_on_selection(self, selected_images, model_path, epsilon, conf, iou):
         try:
             predictor = RealYOLOPredictor(model_path)
             model_class_names = [predictor.get_class_names()[i] for i in sorted(predictor.get_class_names().keys())]
@@ -359,7 +565,7 @@ class MainWindow(QMainWindow):
             if progress_dialog.wasCanceled():
                 break
             
-            self.perform_inference(img_path, predictor, model_class_names, epsilon) # Use model-specific class names for saving
+            self.perform_inference(img_path, predictor, model_class_names, epsilon, conf, iou) # Use model-specific class names for saving
 
         progress_dialog.setValue(len(selected_images))
         QMessageBox.information(self, "Complete", "Inference process finished.")
@@ -368,7 +574,7 @@ class MainWindow(QMainWindow):
         # (e.g., new class colors, or if the current image itself was updated).
         self.load_labels_for_current_image()
 
-    def perform_inference(self, image_path, predictor, class_names, epsilon):
+    def perform_inference(self, image_path, predictor, class_names, epsilon, conf, iou):
         try:
             # Find corresponding image dimensions from self.image_paths
             img_dims = next((dims for path, dims in self.image_paths if path == image_path), None)
@@ -378,7 +584,7 @@ class MainWindow(QMainWindow):
 
             img_w, img_h = img_dims
             
-            instances, _, _ = predictor.predict_and_optimize(image_path, epsilon=epsilon)
+            instances, _, _ = predictor.predict_and_optimize(image_path, epsilon=epsilon, conf=conf, iou=iou)
             shapes_to_save = []
             for inst in instances:
                 class_id, polygon_data, conf = inst
@@ -396,14 +602,32 @@ class MainWindow(QMainWindow):
             print(f"Failed to run inference on {os.path.basename(image_path)}: {e}")
 
     def open_training_dialog(self):
-        dialog = TrainingDialog(self)
+        dialog = TrainingDialog(self.model_path, self)
         if dialog.exec_() == QDialog.Accepted:
             params = dialog.get_parameters()
+            selected_model_path = params.pop('model_path') # Extract and remove from params
+            
             if not params['data']:
                 QMessageBox.warning(self, "Warning", "Dataset YAML file is required.")
                 return
+            
+            if not selected_model_path:
+                QMessageBox.warning(self, "Warning", "Base model is required.")
+                return
 
-            self.training_thread = TrainingThread(self.model, params)
+            # Initialize model for training
+            # We use a separate instance if the path differs, or if we don't have a model loaded yet.
+            try:
+                if self.model and self.model_path == selected_model_path:
+                    training_model = self.model
+                else:
+                    print(f"Loading training model from: {selected_model_path}")
+                    training_model = RealYOLOPredictor(selected_model_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load base model: {e}")
+                return
+
+            self.training_thread = TrainingThread(training_model, params)
             self.training_thread.training_finished.connect(self.on_training_finished)
             self.training_thread.training_failed.connect(self.on_training_failed)
             self.training_thread.start()
@@ -462,66 +686,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load model after training: {e}")
             self.statusBar().showMessage("Error loading new model.", 5000)
-
-    def open_class_manager(self):
-        if not self.class_names and not self.image_paths:
-            reply = QMessageBox.question(self, "No Classes", 
-                                         "There are no classes yet. Would you like to add some?",
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply == QMessageBox.No:
-                return
-
-        old_names = self.class_names[:]
-        dialog = ClassManagerDialog(old_names, self)
-        
-        if dialog.exec_() == QDialog.Accepted:
-            new_names = dialog.get_final_class_names()
-
-            if old_names == new_names:
-                return
-
-            self.viewer.store_shapes() # Save state for undo before any modifications
-
-            removed_names = sorted(list(set(old_names) - set(new_names)))
-            added_names = sorted(list(set(new_names) - set(old_names)))
-            
-            rename_map = {}
-            
-            # --- Heuristic to find renames ---
-            if len(removed_names) == 1 and len(added_names) == 1:
-                old, new = removed_names[0], added_names[0]
-                rename_map[old] = new
-                print(f"Detected rename: {old} -> {new}")
-                # Apply the rename
-                for shape in self.viewer.shapes:
-                    if shape.label == old:
-                        shape.label = new
-                # Remove from lists so they are not treated as deletion/addition
-                removed_names.clear()
-                added_names.clear()
-
-            # --- Handle Deletions ---
-            if removed_names:
-                shapes_to_delete = [s for s in self.viewer.shapes if s.label in removed_names]
-                
-                if shapes_to_delete:
-                    reply = QMessageBox.question(self, "Delete Class in Use",
-                                                 f"The class(es) '{', '.join(removed_names)}' are used by "
-                                                 f"{len(shapes_to_delete)} instance(s) in the current image.\n\n"
-                                                 "Do you want to permanently delete these instances as well?",
-                                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                    if reply == QMessageBox.Yes:
-                        self.viewer.shapes = [s for s in self.viewer.shapes if s.label not in removed_names]
-                    else:
-                        QMessageBox.information(self, "Cancelled", "Class management operation has been cancelled.")
-                        self.viewer.restore_shape() # Restore the initial state
-                        return # Abort
-            
-            # --- Final Update ---
-            self.class_names = new_names
-            self.rebuild_color_map_and_refresh_ui()
-            self.populate_instance_list() # To reflect name changes and deletions
-            self.statusBar().showMessage("Class list updated.", 3000)
 
     def upload_labels(self):
         # 1. Select class name file
@@ -687,22 +851,159 @@ class MainWindow(QMainWindow):
     def on_file_item_clicked(self, item):
         index = self.file_list_widget.row(item)
         self.load_image_by_index(index)
+    
+    def on_instance_selection_changed(self):
+        # Sync selection from list to viewer
+        selected_items = self.instance_list_widget.selectedItems()
+        self.viewer.deselect_shape() # Clear current viewer selection
+        
+        shapes_to_select = []
+        for item in selected_items:
+            instance_id = item.data(Qt.UserRole)
+            if 0 <= instance_id < len(self.viewer.shapes):
+                shapes_to_select.append(self.viewer.shapes[instance_id])
+        
+        for shape in shapes_to_select:
+            self.viewer.select_shape(shape, multi_select=True)
 
     def on_instance_item_clicked(self, item):
-        instance_id = item.data(Qt.UserRole)
-        shape = self.viewer.shapes[instance_id]
-        self.viewer.select_shape(shape)
+        # We now rely on selection changed for syncing logic, but itemClicked can still be useful if needed.
+        # But with ExtendedSelection, simple click triggers selection changed.
+        # So we can leave this empty or redirect.
+        self.on_instance_selection_changed()
 
     def on_polygon_selected(self, shape):
-        if not shape:
-            self.instance_list_widget.clearSelection()
+        # Sync selection from viewer to list
+        # Block signals to prevent feedback loop
+        self.instance_list_widget.blockSignals(True)
+        self.instance_list_widget.clearSelection()
+        
+        if self.viewer.selected_shapes:
+            for shape in self.viewer.selected_shapes:
+                try:
+                    instance_id = self.viewer.shapes.index(shape)
+                    for i in range(self.instance_list_widget.count()):
+                        item = self.instance_list_widget.item(i)
+                        if item.data(Qt.UserRole) == instance_id:
+                            item.setSelected(True)
+                            break
+                except ValueError:
+                    pass
+        
+        self.instance_list_widget.blockSignals(False)
+
+    def show_class_list_context_menu(self, pos):
+        context_menu = QMenu(self)
+        add_action = context_menu.addAction("Add Class")
+        
+        item = self.class_list_widget.itemAt(pos)
+        rename_action = None
+        delete_action = None
+        
+        if item:
+            rename_action = context_menu.addAction("Rename Class")
+            delete_action = context_menu.addAction("Delete Class")
+            
+        action = context_menu.exec_(self.class_list_widget.mapToGlobal(pos))
+        
+        if action == add_action:
+            self.add_class()
+        elif action == rename_action and item:
+            self.rename_class(item)
+        elif action == delete_action and item:
+            self.delete_class(item)
+
+    def on_class_item_double_clicked(self, item):
+        self.rename_class(item)
+
+    def add_class(self):
+        new_class, ok = QInputDialog.getText(self, "Add Class", "Enter new class name:")
+        if ok and new_class:
+            new_class = new_class.strip()
+            if not new_class:
+                QMessageBox.warning(self, "Warning", "Class name cannot be empty.")
+                return
+            if new_class in self.class_names:
+                QMessageBox.warning(self, "Warning", f"Class '{new_class}' already exists.")
+                return
+            
+            self.class_names.append(new_class)
+            self.rebuild_color_map_and_refresh_ui()
+
+    def rename_class(self, item):
+        old_name = item.text()
+        new_name, ok = QInputDialog.getText(self, "Rename Class", "Enter new name:", text=old_name)
+
+        if ok and new_name:
+            new_name = new_name.strip()
+            if not new_name:
+                QMessageBox.warning(self, "Warning", "Class name cannot be empty.")
+                return
+            if new_name != old_name and new_name in self.class_names:
+                QMessageBox.warning(self, "Warning", f"Class '{new_name}' already exists.")
+                return
+
+            self.viewer.store_shapes() # Backup for undo
+            
+            # Update internal list
+            index = self.class_names.index(old_name)
+            self.class_names[index] = new_name
+            
+            # Update existing shapes in current image
+            for shape in self.viewer.shapes:
+                if shape.label == old_name:
+                    shape.label = new_name
+            
+            # Note: This simple rename affects only the current session's class list and current image's shapes in memory.
+            # To be robust like ClassManagerDialog, we rely on 'save_labels' later to persist changes.
+            # However, ClassManagerDialog didn't iterate over ALL files to rename labels, only the current list.
+            # A full project rename would require iterating over all files, which is heavy. 
+            # We follow the established pattern: Update config/list, and update current loaded shapes.
+            
+            self.rebuild_color_map_and_refresh_ui()
+            self.populate_instance_list()
+
+    def delete_class(self, item):
+        name_to_delete = item.text()
+        
+        # Check if used in current image
+        shapes_using_class = [s for s in self.viewer.shapes if s.label == name_to_delete]
+        
+        msg = f"Are you sure you want to delete '{name_to_delete}'?"
+        if shapes_using_class:
+            msg += f"\n\nIt is used by {len(shapes_using_class)} instance(s) in the current image.\nThese instances will also be deleted."
+        
+        reply = QMessageBox.question(self, "Delete Class", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            self.viewer.store_shapes()
+            
+            if name_to_delete in self.class_names:
+                self.class_names.remove(name_to_delete)
+            
+            if shapes_using_class:
+                self.viewer.shapes = [s for s in self.viewer.shapes if s.label != name_to_delete]
+            
+            self.rebuild_color_map_and_refresh_ui()
+            self.populate_instance_list()
+            self.viewer.update()
+
+    def delete_selected_instances(self):
+        if not self.viewer.selected_shapes:
             return
-        instance_id = self.viewer.shapes.index(shape)
-        for i in range(self.instance_list_widget.count()):
-            item = self.instance_list_widget.item(i)
-            if item.data(Qt.UserRole) == instance_id:
-                item.setSelected(True)
-                break
+
+        self.viewer.store_shapes()
+        
+        # Create a copy list to iterate safely while removing
+        shapes_to_remove = list(self.viewer.selected_shapes)
+        
+        for shape in shapes_to_remove:
+            if shape in self.viewer.shapes:
+                self.viewer.shapes.remove(shape)
+        
+        self.viewer.deselect_shape() # Clears selection list
+        self.populate_instance_list()
+        self.viewer.update()
 
     def prev_image(self):
         if self.current_image_index > 0:
@@ -724,6 +1025,8 @@ class MainWindow(QMainWindow):
             if not (self.draw_sam_action.isChecked() or self.paint_mode_action.isChecked()):
                 self.viewer.set_mode(ImageViewer.EDIT)
                 self.set_navigation_enabled(True)
+        
+        self.update_mode_status()
 
     def toggle_sam_mode(self, checked):
         if checked:
@@ -771,6 +1074,8 @@ class MainWindow(QMainWindow):
                 self.viewer.clear_sam_points()
                 self.set_navigation_enabled(True)
                 self.statusBar().showMessage("Ready", 2000)
+            
+            self.update_mode_status()
 
     def toggle_paint_mode(self, checked):
         if checked:
@@ -809,6 +1114,8 @@ class MainWindow(QMainWindow):
                 self.viewer.set_mode(ImageViewer.EDIT)
                 self.set_navigation_enabled(True)
                 self.statusBar().showMessage("Ready")
+        
+        self.update_mode_status()
 
     def on_sam_encoding_finished(self):
         self.is_encoding = False
@@ -827,6 +1134,8 @@ class MainWindow(QMainWindow):
         # Actually in SAM mode we handle clicks specifically in mousePressEvent of viewer
         if self.draw_poly_action.isChecked():
             self.draw_poly_action.setChecked(False)
+        
+        self.update_mode_status()
 
     def on_sam_encoding_failed(self, error_msg):
         self.is_encoding = False
@@ -886,39 +1195,40 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No images to export.")
             return
 
-        # 1. Get the filter class list file
-        class_filter_path, _ = QFileDialog.getOpenFileName(self, "Select Filter Class File (e.g., classes.txt)", "", "Text Files (*.txt)")
-        if not class_filter_path:
+        dialog = ExportDialog(self.class_names, self)
+        if dialog.exec_() != QDialog.Accepted:
             return
 
-        try:
-            with open(class_filter_path, 'r') as f:
-                valid_export_classes = [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to read class filter file: {e}")
-            return
+        output_dir, export_images, ordered_classes = dialog.get_export_data()
 
-        if not valid_export_classes:
-            QMessageBox.warning(self, "Warning", "Class filter file is empty. No labels will be exported.")
-
-        # 2. Get destination directories
-        dest_images_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory for Images")
-        if not dest_images_dir:
-            return
-
-        dest_labels_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory for Labels")
-        if not dest_labels_dir:
+        if not output_dir:
+            QMessageBox.warning(self, "Warning", "Please select an output directory.")
             return
         
-        # 3. Process and export each file
+        if not ordered_classes:
+            QMessageBox.warning(self, "Warning", "No classes selected for export.")
+            return
+
+        # Prepare directories
+        dest_images_dir = os.path.join(output_dir, "images")
+        dest_labels_dir = os.path.join(output_dir, "labels")
+        os.makedirs(dest_images_dir, exist_ok=True)
+        os.makedirs(dest_labels_dir, exist_ok=True)
+
+        # Save classes.txt for reference
+        with open(os.path.join(output_dir, "classes.txt"), "w") as f:
+            for cls in ordered_classes:
+                f.write(f"{cls}\n")
+
+        # Process export
         progress_dialog = QProgressDialog("Exporting files...", "Cancel", 0, len(self.image_paths), self)
         progress_dialog.setWindowModality(Qt.WindowModal)
         progress_dialog.setWindowTitle("Exporting")
         
-        # Ensure manager has latest classes
+        # Ensure manager has latest classes from main app context (though we use ordered_classes for ID mapping)
         self.label_manager.set_class_names(self.class_names)
 
-        exported_labels_count = 0
+        exported_count = 0
         for i, (source_img_path, dims) in enumerate(self.image_paths):
             progress_dialog.setValue(i)
             QApplication.processEvents()
@@ -927,33 +1237,35 @@ class MainWindow(QMainWindow):
 
             img_filename = os.path.basename(source_img_path)
 
-            # a. Copy image file
-            try:
-                shutil.copy(source_img_path, dest_images_dir)
-            except Exception as e:
-                print(f"Failed to copy image {img_filename}: {e}")
-                continue # Skip to next image
+            # 1. Export Image (Optional)
+            if export_images:
+                try:
+                    shutil.copy(source_img_path, dest_images_dir)
+                except Exception as e:
+                    print(f"Failed to copy image {img_filename}: {e}")
+                    continue 
 
-            # b. Export labels via Manager
-            # We want to export only ONE file here effectively per loop, 
-            # but manager.export_labels handles a list. We can use it or call load/save directly.
-            # Efficient way: Let manager handle loading, filtering, saving for single item.
-            # But manager export is batch. Let's make a mini-batch or just use load/save logic.
-            # Actually, manager has export_labels which iterates. We can just call it for the whole list
-            # OUTSIDE the loop if we want to be efficient, but we are also copying images here.
-            # Let's keep the loop structure for image copying + progress, but helper for labels.
-            
+            # 2. Export Labels
             shapes = self.label_manager.load_labels(source_img_path, dims)
-            shapes_to_export = [s for s in shapes if s.label in valid_export_classes]
             
-            if shapes_to_export:
+            # Filter and Remap
+            final_shapes = []
+            for shape in shapes:
+                if shape.label in ordered_classes:
+                    final_shapes.append(shape)
+            
+            if final_shapes:
                 dest_txt_path = os.path.join(dest_labels_dir, os.path.splitext(img_filename)[0] + ".txt")
-                save_yolo_labels(dest_txt_path, shapes_to_export, dims[0], dims[1], valid_export_classes)
-                exported_labels_count += 1
+                # Important: Pass ordered_classes as the 'class_names' list to save_yolo_labels.
+                # save_yolo_labels uses index() to determine ID.
+                save_yolo_labels(dest_txt_path, final_shapes, dims[0], dims[1], ordered_classes)
+                exported_count += 1
 
         progress_dialog.setValue(len(self.image_paths))
         QMessageBox.information(self, "Export Complete", 
-                                f"Exported {len(self.image_paths)} images and {exported_labels_count} label files.")
+                                f"Exported to:\n{output_dir}\n\n"
+                                f"Images: {len(self.image_paths) if export_images else 0}\n"
+                                f"Label Files: {exported_count}")
 
     def run_class_specification(self):
         if not self.image_paths:
@@ -1127,13 +1439,7 @@ class MainWindow(QMainWindow):
 
         # --- SAM Mode Shortcuts ---
         if self.is_sam_mode:
-            if key == Qt.Key_Q:
-                self.sam_point_mode = 1
-                self.statusBar().showMessage("Adding positive points (Left-click to add).")
-            elif key == Qt.Key_E:
-                self.sam_point_mode = 0
-                self.statusBar().showMessage("Adding negative points (Left-click to add).")
-            elif key == Qt.Key_G:
+            if key == Qt.Key_G:
                 self.viewer.reset_sam_prediction()
                 self.statusBar().showMessage("SAM points cleared.", 2000)
             elif key == Qt.Key_F:
@@ -1166,42 +1472,10 @@ class MainWindow(QMainWindow):
                 # Clean up viewer state regardless
                 self.viewer.clear_sam_points()
                 self.viewer.update()
-            elif key == Qt.Key_S:
-                self.draw_sam_action.setChecked(False) # Toggle off
+            
             # Block other conflicting shortcuts
-            elif key in [Qt.Key_A, Qt.Key_D, Qt.Key_W, Qt.Key_B]:
+            elif key in [Qt.Key_A, Qt.Key_D]:
                  self.statusBar().showMessage("Finish or cancel SAM mode before changing images or modes.", 2000)
-            event.accept()
-            return
-
-        # --- Paint Mode Shortcuts ---
-        if key == Qt.Key_B:
-            # Explicitly switch to Paint mode (cancels others)
-            if self.image_paths and self.current_image_index >= 0:
-                self.paint_mode_action.setChecked(True)
-            event.accept()
-            return
-        
-        # 'Q' and 'E' can now trigger Paint mode directly (if not in SAM mode)
-        if key == Qt.Key_Q:
-            if self.image_paths and self.current_image_index >= 0:
-                if not self.paint_mode_action.isChecked():
-                    self.paint_mode_action.setChecked(True)
-                
-                # Ensure specifically in Brush mode (could be toggled from Eraser)
-                self.viewer.set_mode(ImageViewer.CREATE_BRUSH)
-                self.statusBar().showMessage("Switched to Brush.", 1000)
-            event.accept()
-            return
-
-        elif key == Qt.Key_E:
-            if self.image_paths and self.current_image_index >= 0:
-                if not self.paint_mode_action.isChecked():
-                    self.paint_mode_action.setChecked(True)
-                
-                # Ensure specifically in Eraser mode
-                self.viewer.set_mode(ImageViewer.CREATE_ERASER)
-                self.statusBar().showMessage("Switched to Eraser.", 1000)
             event.accept()
             return
 
@@ -1218,30 +1492,7 @@ class MainWindow(QMainWindow):
 
         elif modifiers == Qt.ControlModifier and key == Qt.Key_Z:
             self.undo_action.trigger()
-
-        elif key == Qt.Key_A:
-            if not self.paint_mode_action.isChecked():
-                self.prev_image_action.trigger()
-
-        elif key == Qt.Key_D:
-            if not self.paint_mode_action.isChecked():
-                self.next_image_action.trigger()
         
-        elif key == Qt.Key_W:
-            self.draw_poly_action.setChecked(True)
-
-        elif key == Qt.Key_S:
-            if self.draw_sam_action.isEnabled():
-                self.draw_sam_action.setChecked(True)
-
-        elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
-            if self.viewer.delete_selected_vertex():
-                self.populate_instance_list()
-            elif self.viewer.selected_shapes:
-                reply = QMessageBox.question(self, "Delete", "Delete selected instances?",
-                                             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    self.delete_selected_instances()
         else:
             super().keyPressEvent(event)
             return
@@ -1272,14 +1523,6 @@ class MainWindow(QMainWindow):
         
         self.statusBar().showMessage("Drawing cancelled", 2000)
 
-    def delete_selected_instances(self):
-        self.viewer.store_shapes()
-        for shape in self.viewer.selected_shapes:
-            self.viewer.shapes.remove(shape)
-        self.viewer.deselect_shape()
-        self.populate_instance_list()
-        self.viewer.update()
-        
     def on_instance_double_clicked(self, item):
         instance_id = item.data(Qt.UserRole)
         shape = self.viewer.shapes[instance_id]
@@ -1359,6 +1602,130 @@ class MainWindow(QMainWindow):
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to delete files: {e}")
+
+    def run_batch_tracking(self):
+        if not SAM2_AVAILABLE:
+            QMessageBox.warning(self, "SAM 2 Missing", "SAM 2 library is not installed. Please install it first.")
+            return
+
+        if not self.image_paths:
+            QMessageBox.warning(self, "Warning", "No images loaded.")
+            return
+
+        # Check if we have selected shapes to track
+        selected_shapes = self.viewer.selected_shapes
+        if not selected_shapes:
+            QMessageBox.warning(self, "Warning", "Please select a shape (polygon) on the current image to track.")
+            return
+
+        # 1. Load SAM 2 Model (if not already loaded)
+        if not self.sam2_tracker:
+            # Use default path from Config
+            if os.path.exists(Config.SAM2_CHECKPOINT_PATH):
+                self.sam2_checkpoint_path = Config.SAM2_CHECKPOINT_PATH
+            else:
+                QMessageBox.warning(self, "Model Not Found", 
+                                    f"SAM 2 model not found at:\n{Config.SAM2_CHECKPOINT_PATH}\n\nPlease place 'sam2.1_hiera_large.pt' in the 'models' folder.")
+                return
+            
+            config_name = self.infer_sam2_config(self.sam2_checkpoint_path)
+            
+            try:
+                self.sam2_tracker = SAM2Tracker(config_name, self.sam2_checkpoint_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to initialize SAM 2: {e}\n\nMake sure model config matches checkpoint.")
+                self.sam2_tracker = None
+                return
+
+        # 2. Confirm Action
+        reply = QMessageBox.question(self, "Start Tracking", 
+                                     f"Track {len(selected_shapes)} object(s) across {len(self.image_paths)} images?\nThis may take some time.",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.No:
+            return
+
+        # 3. Start Thread
+        # We need absolute paths for SAM 2
+        abs_image_paths = [os.path.abspath(p[0]) for p in self.image_paths]
+        
+        self.progress_dialog = QProgressDialog("Tracking objects...", "Cancel", 0, len(self.image_paths), self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setWindowTitle("SAM 2 Tracking")
+        self.progress_dialog.show()
+        
+        self.tracker_thread = SAM2TrackerThread(
+            self.sam2_tracker, 
+            abs_image_paths, 
+            self.current_image_index, 
+            selected_shapes, 
+            self.class_names,
+            epsilon=self.epsilon
+        )
+        self.tracker_thread.tracking_finished.connect(self.on_tracking_finished)
+        self.tracker_thread.tracking_failed.connect(self.on_tracking_failed)
+        self.tracker_thread.progress_update.connect(self.on_tracking_progress)
+        self.tracker_thread.start()
+
+    def infer_sam2_config(self, checkpoint_path):
+        filename = os.path.basename(checkpoint_path).lower()
+        if "tiny" in filename: return "sam2.1_hiera_t.yaml"
+        if "small" in filename: return "sam2.1_hiera_s.yaml"
+        if "base_plus" in filename: return "sam2.1_hiera_b+.yaml"
+        if "large" in filename: return "sam2.1_hiera_l.yaml"
+        # Fallback for SAM 2.0 naming or unknown
+        if "hiera_t" in filename: return "sam2_hiera_t.yaml"
+        if "hiera_s" in filename: return "sam2_hiera_s.yaml"
+        if "hiera_b+" in filename: return "sam2_hiera_b+.yaml"
+        if "hiera_l" in filename: return "sam2_hiera_l.yaml"
+        
+        return "sam2.1_hiera_l.yaml"
+
+    def on_tracking_progress(self, current, total):
+        self.progress_dialog.setValue(current)
+        if self.progress_dialog.wasCanceled():
+            self.tracker_thread.stop()
+
+    def on_tracking_failed(self, error_msg):
+        self.progress_dialog.close()
+        QMessageBox.critical(self, "Tracking Failed", f"Error during tracking:\n{error_msg}")
+
+    def on_tracking_finished(self, results):
+        self.progress_dialog.close()
+        
+        # results: {frame_idx: [Shape]}
+        count_added = 0
+        
+        # Ensure LabelManager has latest class names
+        self.label_manager.set_class_names(self.class_names)
+        
+        for frame_idx, new_shapes in results.items():
+            if frame_idx >= len(self.image_paths):
+                continue
+                
+            img_path, dims = self.image_paths[frame_idx]
+            
+            # Skip the starting frame? No, maybe user wants to see result there too (though redundant)
+            # Actually SAM 2 might refine the initial mask too.
+            # But let's avoid duplicates on the start frame if they are identical.
+            # Ideally we merge.
+            
+            existing_shapes = self.label_manager.load_labels(img_path, dims)
+            
+            # Simple merge: append new shapes. 
+            # (User can undo or delete if duplicate, but SAM 2 is usually for filling empty frames)
+            # We assume user is tracking into empty frames mostly.
+            
+            # If we are overwriting, we should filter.
+            # Let's just append for now.
+            combined_shapes = existing_shapes + new_shapes
+            
+            self.label_manager.save_labels(img_path, combined_shapes, dims)
+            count_added += len(new_shapes)
+
+        QMessageBox.information(self, "Tracking Complete", f"Added {count_added} shapes across {len(results)} frames.")
+        
+        # Refresh current image
+        self.load_labels_for_current_image()
 
     def closeEvent(self, event):
         """Clean up temporary files on exit."""

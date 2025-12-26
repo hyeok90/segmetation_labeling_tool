@@ -19,7 +19,7 @@ class RealYOLOPredictor:
                 return self.model.names
             return {}
 
-    def predict_and_optimize(self, img_path, conf=0.25, epsilon=1.0):
+    def predict_and_optimize(self, img_path, conf=0.25, iou=0.7, epsilon=1.0):
         with self.lock:
             img = cv2.imread(img_path)
             if img is None:
@@ -28,7 +28,8 @@ class RealYOLOPredictor:
                 
             img_h, img_w = img.shape[:2]
             
-            results = self.model(img, imgsz=1280, conf=conf, device=self.device, retina_masks=True)
+            # Pass IoU (NMS threshold) to model
+            results = self.model(img, imgsz=1280, conf=conf, iou=iou, device=self.device, retina_masks=True)
 
             if not results or results[0].masks is None:
                 return [], (img_w, img_h), 0.0

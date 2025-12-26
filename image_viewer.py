@@ -71,6 +71,7 @@ class ImageViewer(QtWidgets.QWidget):
         self.sam_preview_shapes = []
         self.sam_prediction_thread = None
         self.is_predicting = False
+        self.last_predicted_point_count = 0
 
     def store_shapes(self):
         shapes_backup = []
@@ -227,10 +228,18 @@ class ImageViewer(QtWidgets.QWidget):
         self.last_mouse_pos = pos
 
         # SAM Mode
-        if self.parent.is_sam_mode and ev.button() == Qt.LeftButton:
-            if self.parent.sam_point_mode is not None:
-                self.add_sam_point(pos, self.parent.sam_point_mode)
-            return
+        if self.parent.is_sam_mode:
+            if ev.button() == Qt.LeftButton:
+                # Left Click -> Positive Point (1)
+                self.add_sam_point(pos, 1)
+                self.parent.statusBar().showMessage("Added positive point.", 1000)
+                return
+            elif ev.button() == Qt.RightButton:
+                # Right Click -> Negative Point (0)
+                self.add_sam_point(pos, 0)
+                self.parent.statusBar().showMessage("Added negative point.", 1000)
+                return
+            # Allow Middle Button to fall through to panning logic below
 
         # Panning
         if ev.button() == Qt.MidButton:
@@ -411,7 +420,21 @@ class ImageViewer(QtWidgets.QWidget):
             if target_shape:
                 # Merge with existing selected shape
                 original_poly = self.shape_to_shapely(target_shape)
-                merged_poly = unary_union([original_poly, unified_stroke])
+                
+                if not original_poly.is_valid:
+                    original_poly = original_poly.buffer(0)
+                
+                try:
+                    merged_poly = unary_union([original_poly, unified_stroke])
+                except Exception as e:
+                    print(f"Topology error during merge, attempting repair: {e}")
+                    original_poly = original_poly.buffer(0)
+                    unified_stroke = unified_stroke.buffer(0)
+                    merged_poly = unary_union([original_poly, unified_stroke])
+                
+                if not merged_poly.is_valid:
+                    merged_poly = merged_poly.buffer(0)
+
                 self.update_shape_from_shapely(target_shape, merged_poly)
             else:
                 # Create NEW shape from the stroke (No selection -> New Instance)
@@ -435,6 +458,10 @@ class ImageViewer(QtWidgets.QWidget):
                     
                 diff_poly = original_poly.difference(unified_stroke)
                 
+                # Fix potential topological errors (self-intersections)
+                if not diff_poly.is_valid:
+                    diff_poly = diff_poly.buffer(0)
+
                 if diff_poly.is_empty:
                     shapes_to_remove.append(shape)
                 else:
@@ -583,6 +610,7 @@ class ImageViewer(QtWidgets.QWidget):
             return
 
         self.is_predicting = True
+        self.last_predicted_point_count = len(self.sam_points)
         self.parent.statusBar().showMessage("Running SAM prediction...")
 
         points = np.array([[p.x(), p.y()] for p in self.sam_points])
@@ -607,6 +635,10 @@ class ImageViewer(QtWidgets.QWidget):
         self.is_predicting = False
         self.parent.statusBar().showMessage("SAM prediction finished.", 2000)
         self.update()
+
+        # Check if new points were added while predicting
+        if len(self.sam_points) != self.last_predicted_point_count:
+            self.predict_sam_mask()
 
     def on_sam_prediction_failed(self, error_msg):
         self.is_predicting = False

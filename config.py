@@ -11,6 +11,7 @@ class Config:
     TEMP_DIR_NAME = ".temp_labels"
     SAM_ENCODER_PATH = os.path.join("sam", "sam_encoder.onnx")
     SAM_DECODER_PATH = os.path.join("sam", "sam_decoder.onnx")
+    SAM2_CHECKPOINT_PATH = os.path.join("models", "sam2.1_hiera_large.pt")
     
     # Defaults
     DEFAULT_EPSILON = 1.0
